@@ -1,7 +1,7 @@
 task: classify
 mode: train
-model: yolov8n-cls.pt
-data: C:\Users\xuanw\OneDrive\Desktop\Uni\INF2009\dataset
+model: yolo26n-cls.pt
+data: C:\GitHub\INF2009-Project\dataset
 epochs: 20
 time: null
 patience: 100
