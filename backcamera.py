@@ -5,7 +5,7 @@ from ultralytics import YOLO
 
 
 CAMERA_INDEX = 0
-WINDOW_NAME = "Back Camera Live Feed"
+WINDOW_NAME = "Pi Sentry"
 FRAME_WIDTH = 1280
 FRAME_HEIGHT = 720
 TARGET_CLASSES = {0: "Person", 2: "Car", 7: "Truck"}
@@ -127,6 +127,9 @@ def main():
     loitering_times = {}
     last_seen_times = {}
 
+    cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(WINDOW_NAME, 640, 480)
+
     print(f"Camera started with detector: {model_path} | imgsz={image_size} | conf={MODEL_CONFIDENCE}")
     print("Press 'q' in the video window to stop.")
 
@@ -158,8 +161,8 @@ def main():
 
             frame_width = frame.shape[1]
             cv2.rectangle(frame, (0, 0), (frame_width, 45), (0, 0, 0), -1)
-            cv2.putText(frame, f"SUSPICIOUS TRACKS: {suspicious_count}", (10, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-            cv2.putText(frame, f"STATUS: {scene_status}", (10, 38), cv2.FONT_HERSHEY_SIMPLEX, 0.6, scene_color, 2)
+            cv2.putText(frame, f"SUSPICIOUS TRACKS: {suspicious_count}", (10, 15), 1, 0.9, (255, 255, 255), 1)
+            cv2.putText(frame, f"STATUS: {scene_status}", (10, 35), 1, 0.9, scene_color, 1)
             cv2.imshow(WINDOW_NAME, frame)
 
             if cv2.waitKey(1) & 0xFF == ord("q"):
