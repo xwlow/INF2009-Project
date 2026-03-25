@@ -18,7 +18,9 @@ DETECTION_IMAGE_SIZE = 640
 def load_detector():
     for model_path in ("yolo26n_openvino_model/", "yolo26n.pt"):
         try:
-            return YOLO(model_path)
+            detector = YOLO(model_path)
+            image_size = 320 if "openvino" in model_path.lower() else DETECTION_IMAGE_SIZE
+            return detector, image_size
         except Exception:
             continue
 
@@ -46,11 +48,11 @@ def get_suspicion_rule(class_id, stay_duration):
     return None
 
 
-def annotate_detections(frame, detector, loitering_times, last_seen_times):
+def annotate_detections(frame, detector, image_size, loitering_times, last_seen_times):
     current_time = time.time()
     results = detector.track(
         frame,
-        imgsz=DETECTION_IMAGE_SIZE,
+        imgsz=image_size,
         conf=0.25,
         persist=True,
         tracker="bytetrack.yaml",
@@ -119,7 +121,7 @@ def annotate_detections(frame, detector, loitering_times, last_seen_times):
 
 
 def main():
-    detector = load_detector()
+    detector, image_size = load_detector()
     cap = open_camera()
     loitering_times = {}
     last_seen_times = {}
@@ -134,7 +136,13 @@ def main():
                 time.sleep(0.1)
                 continue
 
-            frame, suspicious_count = annotate_detections(frame, detector, loitering_times, last_seen_times)
+            frame, suspicious_count = annotate_detections(
+                frame,
+                detector,
+                image_size,
+                loitering_times,
+                last_seen_times,
+            )
 
             if suspicious_count >= 3:
                 scene_status = "CRITICAL THREAT"
