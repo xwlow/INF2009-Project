@@ -1,18 +1,17 @@
 import time
 
 import cv2
-from gpiozero import MotionSensor
 from ultralytics import YOLO
 
 
-PIR_PIN = 4
 CAMERA_INDEX = 0
 WINDOW_NAME = "Back Camera Live Feed"
 FRAME_WIDTH = 640
 FRAME_HEIGHT = 480
-MOTION_HOLD_SECONDS = 60
-POLL_INTERVAL = 0.1
 TARGET_CLASSES = {0: "Person", 2: "Car", 7: "Truck"}
+HUMAN_LOITER_SECONDS = 10
+VEHICLE_LOITER_SECONDS = 5
+TRACK_FORGET_SECONDS = 2
 
 
 def load_detector():
@@ -36,11 +35,28 @@ def open_camera():
     return cap
 
 
-def annotate_detections(frame, detector):
+def get_suspicion_rule(class_id, stay_duration):
+    if class_id == 0 and stay_duration >= HUMAN_LOITER_SECONDS:
+        return "LOITERING HUMAN"
+
+    if class_id in (2, 7) and stay_duration >= VEHICLE_LOITER_SECONDS:
+        return "LOITERING VEHICLE"
+
+    return None
+
+
+def annotate_detections(frame, detector, loitering_times, last_seen_times):
+    current_time = time.time()
     results = detector.track(frame, imgsz=320, persist=True, tracker="bytetrack.yaml", verbose=False)
+    active_ids = set()
+    suspicious_count = 0
 
     if not results or results[0].boxes is None or results[0].boxes.id is None:
-        return frame
+        for track_id in list(last_seen_times.keys()):
+            if current_time - last_seen_times[track_id] > TRACK_FORGET_SECONDS:
+                last_seen_times.pop(track_id, None)
+                loitering_times.pop(track_id, None)
+        return frame, 0
 
     boxes = results[0].boxes.xyxy.int().cpu().tolist()
     class_ids = results[0].boxes.cls.int().cpu().tolist()
@@ -50,75 +66,81 @@ def annotate_detections(frame, detector):
         if class_id not in TARGET_CLASSES:
             continue
 
+        active_ids.add(track_id)
+        if track_id not in loitering_times:
+            loitering_times[track_id] = current_time
+        last_seen_times[track_id] = current_time
+
+        stay_duration = current_time - loitering_times[track_id]
+        suspicion_rule = get_suspicion_rule(class_id, stay_duration)
         x1, y1, x2, y2 = box
-        label = f"{TARGET_CLASSES[class_id]} ID:{track_id}"
-        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        color = (0, 255, 0)
+        label = f"{TARGET_CLASSES[class_id]} ID:{track_id} {stay_duration:.1f}s"
+
+        if suspicion_rule is not None:
+            suspicious_count += 1
+            color = (0, 0, 255)
+            label = f"SUSPECT: {suspicion_rule} ID:{track_id} {stay_duration:.1f}s"
+
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
         cv2.putText(
             frame,
             label,
             (x1, max(y1 - 10, 20)),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.6,
-            (0, 255, 0),
+            color,
             2,
         )
 
-    return frame
+    for track_id in list(last_seen_times.keys()):
+        if track_id not in active_ids and current_time - last_seen_times[track_id] > TRACK_FORGET_SECONDS:
+            last_seen_times.pop(track_id, None)
+            loitering_times.pop(track_id, None)
+
+    return frame, suspicious_count
 
 
 def main():
     detector = load_detector()
-    pir = MotionSensor(PIR_PIN)
-    cap = None
-    motion_deadline = 0.0
+    cap = open_camera()
+    loitering_times = {}
+    last_seen_times = {}
 
-    print("Watching for motion... Press 'q' in the video window to stop.")
+    print("Camera started. Press 'q' in the video window to stop.")
 
     try:
         while True:
-            now = time.time()
+            ret, frame = cap.read()
+            if not ret:
+                print("Camera frame read failed. Retrying...")
+                time.sleep(0.1)
+                continue
 
-            if pir.motion_detected:
-                motion_deadline = now + MOTION_HOLD_SECONDS
+            frame, suspicious_count = annotate_detections(frame, detector, loitering_times, last_seen_times)
 
-                if cap is None:
-                    cap = open_camera()
-                    print("Motion detected. Camera started.")
-
-            if cap is not None:
-                ret, frame = cap.read()
-                if not ret:
-                    print("Camera frame read failed. Retrying...")
-                    time.sleep(POLL_INTERVAL)
-                    continue
-
-                frame = annotate_detections(frame, detector)
-                cv2.putText(
-                    frame,
-                    "Motion detected",
-                    (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    1,
-                    (0, 255, 0),
-                    2,
-                )
-                cv2.imshow(WINDOW_NAME, frame)
-
-                if cv2.waitKey(1) & 0xFF == ord("q"):
-                    break
-
-                if now > motion_deadline:
-                    cap.release()
-                    cap = None
-                    cv2.destroyWindow(WINDOW_NAME)
-                    print("No motion. Camera stopped.")
+            if suspicious_count >= 3:
+                scene_status = "CRITICAL THREAT"
+                scene_color = (0, 0, 255)
+            elif suspicious_count >= 1:
+                scene_status = "ELEVATED WARNING"
+                scene_color = (0, 255, 255)
             else:
-                time.sleep(POLL_INTERVAL)
+                scene_status = "SECURE"
+                scene_color = (0, 255, 0)
+
+            frame_width = frame.shape[1]
+            cv2.rectangle(frame, (0, 0), (frame_width, 45), (0, 0, 0), -1)
+            cv2.putText(frame, f"SUSPICIOUS TRACKS: {suspicious_count}", (10, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+            cv2.putText(frame, f"STATUS: {scene_status}", (10, 38), cv2.FONT_HERSHEY_SIMPLEX, 0.6, scene_color, 2)
+            cv2.imshow(WINDOW_NAME, frame)
+
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                break
     except KeyboardInterrupt:
         print("Exiting...")
     finally:
-        if cap is not None:
-            cap.release()
+        cap.release()
         cv2.destroyAllWindows()
 
 
