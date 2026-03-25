@@ -6,21 +6,22 @@ from ultralytics import YOLO
 
 CAMERA_INDEX = 0
 WINDOW_NAME = "Back Camera Live Feed"
-FRAME_WIDTH = 640
-FRAME_HEIGHT = 480
+FRAME_WIDTH = 1280
+FRAME_HEIGHT = 720
 TARGET_CLASSES = {0: "Person", 2: "Car", 7: "Truck"}
 HUMAN_LOITER_SECONDS = 10
 VEHICLE_LOITER_SECONDS = 5
 TRACK_FORGET_SECONDS = 2
 DETECTION_IMAGE_SIZE = 640
+MODEL_CONFIDENCE = 0.15
 
 
 def load_detector():
-    for model_path in ("yolo26n_openvino_model/", "yolo26n.pt"):
+    for model_path in ("yolo26n.pt", "yolo26n_openvino_model/"):
         try:
             detector = YOLO(model_path)
             image_size = 320 if "openvino" in model_path.lower() else DETECTION_IMAGE_SIZE
-            return detector, image_size
+            return detector, image_size, model_path
         except Exception:
             continue
 
@@ -53,7 +54,7 @@ def annotate_detections(frame, detector, image_size, loitering_times, last_seen_
     results = detector.track(
         frame,
         imgsz=image_size,
-        conf=0.25,
+        conf=MODEL_CONFIDENCE,
         persist=True,
         tracker="bytetrack.yaml",
         verbose=False,
@@ -121,12 +122,13 @@ def annotate_detections(frame, detector, image_size, loitering_times, last_seen_
 
 
 def main():
-    detector, image_size = load_detector()
+    detector, image_size, model_path = load_detector()
     cap = open_camera()
     loitering_times = {}
     last_seen_times = {}
 
-    print("Camera started. Press 'q' in the video window to stop.")
+    print(f"Camera started with detector: {model_path} | imgsz={image_size} | conf={MODEL_CONFIDENCE}")
+    print("Press 'q' in the video window to stop.")
 
     try:
         while True:
