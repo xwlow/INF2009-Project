@@ -12,6 +12,7 @@ TARGET_CLASSES = {0: "Person", 2: "Car", 7: "Truck"}
 HUMAN_LOITER_SECONDS = 10
 VEHICLE_LOITER_SECONDS = 5
 TRACK_FORGET_SECONDS = 2
+DETECTION_IMAGE_SIZE = 640
 
 
 def load_detector():
@@ -47,11 +48,18 @@ def get_suspicion_rule(class_id, stay_duration):
 
 def annotate_detections(frame, detector, loitering_times, last_seen_times):
     current_time = time.time()
-    results = detector.track(frame, imgsz=320, persist=True, tracker="bytetrack.yaml", verbose=False)
+    results = detector.track(
+        frame,
+        imgsz=DETECTION_IMAGE_SIZE,
+        conf=0.25,
+        persist=True,
+        tracker="bytetrack.yaml",
+        verbose=False,
+    )
     active_ids = set()
     suspicious_count = 0
 
-    if not results or results[0].boxes is None or results[0].boxes.id is None:
+    if not results or results[0].boxes is None:
         for track_id in list(last_seen_times.keys()):
             if current_time - last_seen_times[track_id] > TRACK_FORGET_SECONDS:
                 last_seen_times.pop(track_id, None)
@@ -60,24 +68,33 @@ def annotate_detections(frame, detector, loitering_times, last_seen_times):
 
     boxes = results[0].boxes.xyxy.int().cpu().tolist()
     class_ids = results[0].boxes.cls.int().cpu().tolist()
-    track_ids = results[0].boxes.id.int().cpu().tolist()
+    if results[0].boxes.id is not None:
+        track_ids = results[0].boxes.id.int().cpu().tolist()
+    else:
+        track_ids = [None] * len(boxes)
 
     for box, class_id, track_id in zip(boxes, class_ids, track_ids):
         if class_id not in TARGET_CLASSES:
             continue
 
-        active_ids.add(track_id)
-        if track_id not in loitering_times:
-            loitering_times[track_id] = current_time
-        last_seen_times[track_id] = current_time
+        is_tracked = track_id is not None
+        stay_duration = 0.0
+        if is_tracked:
+            active_ids.add(track_id)
+            if track_id not in loitering_times:
+                loitering_times[track_id] = current_time
+            last_seen_times[track_id] = current_time
+            stay_duration = current_time - loitering_times[track_id]
 
-        stay_duration = current_time - loitering_times[track_id]
         suspicion_rule = get_suspicion_rule(class_id, stay_duration)
         x1, y1, x2, y2 = box
         color = (0, 255, 0)
-        label = f"{TARGET_CLASSES[class_id]} ID:{track_id} {stay_duration:.1f}s"
+        label = TARGET_CLASSES[class_id]
 
-        if suspicion_rule is not None:
+        if is_tracked:
+            label = f"{label} ID:{track_id} {stay_duration:.1f}s"
+
+        if is_tracked and suspicion_rule is not None:
             suspicious_count += 1
             color = (0, 0, 255)
             label = f"SUSPECT: {suspicion_rule} ID:{track_id} {stay_duration:.1f}s"
