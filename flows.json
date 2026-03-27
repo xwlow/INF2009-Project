@@ -1,0 +1,602 @@
+[
+    {
+        "id": "9354d92f2cd0f1be",
+        "type": "tab",
+        "label": "Flow 1",
+        "disabled": false,
+        "info": "",
+        "env": []
+    },
+    {
+        "id": "353a151ccf3a0eea",
+        "type": "ui_gauge",
+        "z": "9354d92f2cd0f1be",
+        "name": "",
+        "group": "0d1563d941e60cb0",
+        "order": 5,
+        "width": 0,
+        "height": 0,
+        "gtype": "gage",
+        "title": "Risk Score",
+        "label": "%",
+        "format": "{{value}}",
+        "min": 0,
+        "max": "100",
+        "colors": [
+            "#00b500",
+            "#e6e600",
+            "#ca3838"
+        ],
+        "seg1": "",
+        "seg2": "",
+        "diff": false,
+        "className": "",
+        "x": 670,
+        "y": 560,
+        "wires": []
+    },
+    {
+        "id": "8764250a23052be6",
+        "type": "ui_toast",
+        "z": "9354d92f2cd0f1be",
+        "position": "top right",
+        "displayTime": "10",
+        "highlight": "",
+        "sendall": true,
+        "outputs": 0,
+        "ok": "OK",
+        "cancel": "",
+        "raw": false,
+        "className": "",
+        "topic": "",
+        "name": "",
+        "x": 810,
+        "y": 600,
+        "wires": []
+    },
+    {
+        "id": "aef75135a77ee78e",
+        "type": "mqtt in",
+        "z": "9354d92f2cd0f1be",
+        "name": "",
+        "topic": "sentry/alerts",
+        "qos": "2",
+        "datatype": "auto-detect",
+        "broker": "e46658b8c7885fe5",
+        "nl": false,
+        "rap": true,
+        "rh": 0,
+        "inputs": 0,
+        "x": 290,
+        "y": 500,
+        "wires": [
+            [
+                "bbf737fc30c1d842"
+            ]
+        ]
+    },
+    {
+        "id": "bbf737fc30c1d842",
+        "type": "function",
+        "z": "9354d92f2cd0f1be",
+        "name": "imagepayload",
+        "func": "let data = msg.payload;\n\nif (typeof data === \"string\") {\n    data = JSON.parse(data);\n}\n\nlet imgMsg = null;\nlet riskMsg = null;\n\nif (data.image) {\n    imgMsg = {\n        payload: \"data:image/jpeg;base64,\" + data.image\n    };\n}\n\nriskMsg = {\n    payload: Number(data.scene_risk_score || 0)\n};\n\nreturn [imgMsg, riskMsg];",
+        "outputs": 2,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 480,
+        "y": 500,
+        "wires": [
+            [
+                "bf0adb2b62ba674f"
+            ],
+            [
+                "353a151ccf3a0eea",
+                "1c5f57cde0342a2b"
+            ]
+        ]
+    },
+    {
+        "id": "bf0adb2b62ba674f",
+        "type": "ui_template",
+        "z": "9354d92f2cd0f1be",
+        "group": "0d1563d941e60cb0",
+        "name": "",
+        "order": 1,
+        "width": 16,
+        "height": "12",
+        "format": "<div style=\"width:100%; text-align:center;\">\n    <h3>Live Camera Feed</h3>\n    <img ng-src=\"{{msg.payload}}\" style=\"width:100%; height:auto; display:block; object-fit:contain;\" />\n</div>",
+        "storeOutMessages": true,
+        "fwdInMessages": true,
+        "resendOnRefresh": true,
+        "templateScope": "local",
+        "className": "",
+        "x": 660,
+        "y": 500,
+        "wires": [
+            [
+                "77c80f5d6d3fcef5"
+            ]
+        ]
+    },
+    {
+        "id": "d8daecd51f5698c4",
+        "type": "mqtt in",
+        "z": "9354d92f2cd0f1be",
+        "name": "",
+        "topic": "sentry/light",
+        "qos": "2",
+        "datatype": "auto-detect",
+        "broker": "e46658b8c7885fe5",
+        "nl": false,
+        "rap": true,
+        "rh": 0,
+        "inputs": 0,
+        "x": 100,
+        "y": 860,
+        "wires": [
+            [
+                "f5ed891be3155697"
+            ]
+        ]
+    },
+    {
+        "id": "f5ed891be3155697",
+        "type": "function",
+        "z": "9354d92f2cd0f1be",
+        "name": "light noti",
+        "func": "const currentStatus = msg.payload.status;\nconst previousStatus = flow.get(\"last_light_status\");\n\nif (!currentStatus) {\n    return null;\n}\n\nif (previousStatus === undefined) {\n    flow.set(\"last_light_status\", currentStatus);\n    return null;\n}\n\nif (currentStatus !== previousStatus) {\n    flow.set(\"last_light_status\", currentStatus);\n\n    if (currentStatus === \"dark\") {\n        msg.payload = \"Light level is low: DARK\";\n    } else if (currentStatus === \"bright\") {\n        msg.payload = \"Light level is normal: BRIGHT\";\n    } else {\n        msg.payload = \"Light status changed: \" + currentStatus;\n    }\n\n    return msg;\n}\n\nreturn null;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 260,
+        "y": 860,
+        "wires": [
+            [
+                "e1c74350f2113352"
+            ]
+        ]
+    },
+    {
+        "id": "e1c74350f2113352",
+        "type": "ui_toast",
+        "z": "9354d92f2cd0f1be",
+        "position": "top left",
+        "displayTime": "5",
+        "highlight": "",
+        "sendall": true,
+        "outputs": 0,
+        "ok": "OK",
+        "cancel": "",
+        "raw": false,
+        "className": "",
+        "topic": "",
+        "name": "",
+        "x": 470,
+        "y": 860,
+        "wires": []
+    },
+    {
+        "id": "77c80f5d6d3fcef5",
+        "type": "debug",
+        "z": "9354d92f2cd0f1be",
+        "name": "debug 3",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "false",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 840,
+        "y": 500,
+        "wires": []
+    },
+    {
+        "id": "1c5f57cde0342a2b",
+        "type": "function",
+        "z": "9354d92f2cd0f1be",
+        "name": "Alarm",
+        "func": "const risk = Number(msg.payload || 0);\nconst wasHigh = flow.get(\"risk_was_high\") || false;\n\nif (risk > 70 && !wasHigh) {\n    flow.set(\"risk_was_high\", true);\n    msg.payload = `High risk detected: ${risk}%`;\n    return msg;\n}\n\nif (risk <= 70 && wasHigh) {\n    flow.set(\"risk_was_high\", false);\n}\n\nreturn null;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 650,
+        "y": 600,
+        "wires": [
+            [
+                "8764250a23052be6"
+            ]
+        ]
+    },
+    {
+        "id": "d2f905b48b948f15",
+        "type": "mqtt in",
+        "z": "9354d92f2cd0f1be",
+        "name": "",
+        "topic": "sentry/whitelist",
+        "qos": "2",
+        "datatype": "auto-detect",
+        "broker": "e46658b8c7885fe5",
+        "nl": false,
+        "rap": true,
+        "rh": 0,
+        "inputs": 0,
+        "x": 120,
+        "y": 960,
+        "wires": [
+            [
+                "e4855818b77f3424"
+            ]
+        ]
+    },
+    {
+        "id": "e4855818b77f3424",
+        "type": "function",
+        "z": "9354d92f2cd0f1be",
+        "name": "displaywhitelist",
+        "func": "let data = msg.payload;\n\nif (typeof data === \"string\") {\n    data = JSON.parse(data);\n}\n\nif (!Array.isArray(data)) {\n    msg.payload = [];\n    return msg;\n}\n\nmsg.payload = data.map(row => ({\n    carplate: String(row[\"Car Plate\"] || \"\")\n        .trim()\n        .toUpperCase(),\n    entry_frequency: Number(row[\"Entry Frequency\"] || 0)\n}));\n\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 320,
+        "y": 960,
+        "wires": [
+            [
+                "04a137f04f263282"
+            ]
+        ]
+    },
+    {
+        "id": "04a137f04f263282",
+        "type": "ui_template",
+        "z": "9354d92f2cd0f1be",
+        "group": "0d1563d941e60cb0",
+        "name": "",
+        "order": 7,
+        "width": 0,
+        "height": 0,
+        "format": "<div style=\"padding:8px;\">\n    <h3 style=\"margin-top:0;\">Whitelist</h3>\n    <table style=\"width:100%; border-collapse:collapse; text-align:left;\">\n        <thead>\n            <tr>\n                <th style=\"border-bottom:1px solid #ccc; padding:8px;\">Car Plate</th>\n                <th style=\"border-bottom:1px solid #ccc; padding:8px;\">Entry Frequency</th>\n            </tr>\n        </thead>\n        <tbody>\n            <tr ng-repeat=\"row in msg.payload track by $index\">\n                <td style=\"border-bottom:1px solid #eee; padding:8px;\">{{row.carplate}}</td>\n                <td style=\"border-bottom:1px solid #eee; padding:8px;\">{{row.entry_frequency}}</td>\n            </tr>\n            <tr ng-if=\"!msg.payload || msg.payload.length === 0\">\n                <td colspan=\"2\" style=\"padding:8px;\">No whitelist data</td>\n            </tr>\n        </tbody>\n    </table>\n</div>",
+        "storeOutMessages": true,
+        "fwdInMessages": true,
+        "resendOnRefresh": true,
+        "templateScope": "local",
+        "className": "",
+        "x": 500,
+        "y": 960,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "97b56945bad05d21",
+        "type": "mqtt in",
+        "z": "9354d92f2cd0f1be",
+        "name": "",
+        "topic": "sentry/cloud/alerts",
+        "qos": "2",
+        "datatype": "auto-detect",
+        "broker": "e46658b8c7885fe5",
+        "nl": false,
+        "rap": true,
+        "rh": 0,
+        "inputs": 0,
+        "x": 150,
+        "y": 1040,
+        "wires": [
+            [
+                "25c6ad788c513602"
+            ]
+        ]
+    },
+    {
+        "id": "25c6ad788c513602",
+        "type": "function",
+        "z": "9354d92f2cd0f1be",
+        "name": "Cloud Alarm",
+        "func": "let data = msg.payload;\nlet text = \"\";\n\n// Accept either plain string or JSON\nif (typeof data === \"string\") {\n    try {\n        data = JSON.parse(data);\n    } catch (e) {\n        text = data;\n    }\n}\n\nif (!text) {\n    if (data.alert) {\n        text = data.alert;\n    } else if (data.message) {\n        text = data.message;\n    } else {\n        text = JSON.stringify(data);\n    }\n}\n\n// build one log entry\nconst now = new Date().toLocaleString();\nconst entry = {\n    time: now,\n    text: text\n};\n\n// get existing log from flow context\nlet logs = flow.get(\"cloud_alert_logs\") || [];\n\n// newest first\nlogs.unshift(entry);\n\n// keep only latest 20\nlogs = logs.slice(0, 20);\n\nflow.set(\"cloud_alert_logs\", logs);\n\n// send whole log list to template\nmsg.payload = logs;\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 350,
+        "y": 1040,
+        "wires": [
+            [
+                "d7e32976d770538d"
+            ]
+        ]
+    },
+    {
+        "id": "e21ae6ead5a887c3",
+        "type": "mqtt out",
+        "z": "9354d92f2cd0f1be",
+        "name": "",
+        "topic": "sentry/register",
+        "qos": "",
+        "retain": "",
+        "respTopic": "",
+        "contentType": "",
+        "userProps": "",
+        "correl": "",
+        "expiry": "",
+        "broker": "e46658b8c7885fe5",
+        "x": 780,
+        "y": 700,
+        "wires": []
+    },
+    {
+        "id": "ba66c007d1e2fa02",
+        "type": "ui_form",
+        "z": "9354d92f2cd0f1be",
+        "name": "",
+        "label": "",
+        "group": "0d1563d941e60cb0",
+        "order": 5,
+        "width": 0,
+        "height": 0,
+        "options": [
+            {
+                "label": "Carplate",
+                "value": "carplate",
+                "type": "text",
+                "required": true,
+                "rows": null
+            },
+            {
+                "label": "Add/Remove",
+                "value": "action",
+                "type": "text",
+                "required": true,
+                "rows": null
+            }
+        ],
+        "formValue": {
+            "carplate": "",
+            "action": ""
+        },
+        "payload": "",
+        "submit": "submit",
+        "cancel": "cancel",
+        "topic": "topic",
+        "topicType": "msg",
+        "splitLayout": "",
+        "className": "",
+        "x": 350,
+        "y": 700,
+        "wires": [
+            [
+                "8d8ebea75b2b76d0"
+            ]
+        ]
+    },
+    {
+        "id": "8d8ebea75b2b76d0",
+        "type": "function",
+        "z": "9354d92f2cd0f1be",
+        "name": "carplate add/remove",
+        "func": "const carplate = String(msg.payload.carplate || \"\")\n    .trim()\n    .toUpperCase()\n    .replace(/\\s+/g, \"\");\n\nconst action = String(msg.payload.action || \"\")\n    .trim()\n    .toLowerCase();\n\nif (!carplate) {\n    return null;\n}\n\nif (![\"add\", \"remove\"].includes(action)) {\n    return null;\n}\n\nmsg.payload = {\n    action: action,\n    carplate: carplate\n};\n\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 560,
+        "y": 700,
+        "wires": [
+            [
+                "e21ae6ead5a887c3"
+            ]
+        ]
+    },
+    {
+        "id": "82412615a60df04f",
+        "type": "ui_button",
+        "z": "9354d92f2cd0f1be",
+        "name": "",
+        "group": "0d1563d941e60cb0",
+        "order": 6,
+        "width": 0,
+        "height": 0,
+        "passthru": false,
+        "label": "refresh button",
+        "tooltip": "",
+        "color": "",
+        "bgcolor": "",
+        "className": "",
+        "icon": "",
+        "payload": "",
+        "payloadType": "str",
+        "topic": "topic",
+        "topicType": "msg",
+        "x": 440,
+        "y": 760,
+        "wires": [
+            [
+                "ae519f7ba629e115"
+            ]
+        ]
+    },
+    {
+        "id": "ae519f7ba629e115",
+        "type": "function",
+        "z": "9354d92f2cd0f1be",
+        "name": "sync whitelist",
+        "func": "msg.payload = {\n    action: \"sync\"\n};\n\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 630,
+        "y": 760,
+        "wires": [
+            [
+                "e21ae6ead5a887c3"
+            ]
+        ]
+    },
+    {
+        "id": "d7e32976d770538d",
+        "type": "ui_template",
+        "z": "9354d92f2cd0f1be",
+        "group": "0d1563d941e60cb0",
+        "name": "",
+        "order": 7,
+        "width": 0,
+        "height": 0,
+        "format": "<div style=\"padding:8px;\">\n    <h3 style=\"margin-top:0;\">Cloud Alerts</h3>\n\n    <div ng-if=\"!msg.payload || msg.payload.length === 0\"\n         style=\"padding:8px; color:#888;\">\n        No alerts yet\n    </div>\n\n    <div ng-repeat=\"row in msg.payload track by $index\"\n         style=\"border-bottom:1px solid #ddd; padding:8px 4px;\">\n        <div style=\"font-size:12px; color:#888;\">{{row.time}}</div>\n        <div style=\"font-weight:500;\">{{row.text}}</div>\n    </div>\n</div>",
+        "storeOutMessages": true,
+        "fwdInMessages": true,
+        "resendOnRefresh": true,
+        "templateScope": "local",
+        "className": "",
+        "x": 540,
+        "y": 1040,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "75e33c09c1d921f3",
+        "type": "ui_button",
+        "z": "9354d92f2cd0f1be",
+        "name": "",
+        "group": "0d1563d941e60cb0",
+        "order": 8,
+        "width": 0,
+        "height": 0,
+        "passthru": false,
+        "label": "clear logs",
+        "tooltip": "",
+        "color": "",
+        "bgcolor": "",
+        "className": "",
+        "icon": "",
+        "payload": "",
+        "payloadType": "str",
+        "topic": "topic",
+        "topicType": "msg",
+        "x": 200,
+        "y": 1120,
+        "wires": [
+            [
+                "3cf2ac6cb38e5160"
+            ]
+        ]
+    },
+    {
+        "id": "3cf2ac6cb38e5160",
+        "type": "function",
+        "z": "9354d92f2cd0f1be",
+        "name": "clear logs",
+        "func": "flow.set(\"cloud_alert_logs\", []);\nmsg.payload = [];\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 360,
+        "y": 1120,
+        "wires": [
+            [
+                "d7e32976d770538d"
+            ]
+        ]
+    },
+    {
+        "id": "36af8355a2b6408e",
+        "type": "ui_spacer",
+        "z": "9354d92f2cd0f1be",
+        "name": "spacer",
+        "group": "0d1563d941e60cb0",
+        "order": 4,
+        "width": 10,
+        "height": 1
+    },
+    {
+        "id": "6ecc7b024ef5de93",
+        "type": "ui_spacer",
+        "z": "9354d92f2cd0f1be",
+        "name": "spacer",
+        "group": "0d1563d941e60cb0",
+        "order": 6,
+        "width": 16,
+        "height": 1
+    },
+    {
+        "id": "0d1563d941e60cb0",
+        "type": "ui_group",
+        "name": "Smart Sentry Live",
+        "tab": "e4d0f57be5e6ac2d",
+        "order": 1,
+        "disp": true,
+        "width": 16,
+        "collapse": false,
+        "className": ""
+    },
+    {
+        "id": "e46658b8c7885fe5",
+        "type": "mqtt-broker",
+        "name": "",
+        "broker": "localhost",
+        "port": 1883,
+        "clientid": "",
+        "autoConnect": true,
+        "usetls": false,
+        "protocolVersion": 4,
+        "keepalive": 60,
+        "cleansession": true,
+        "autoUnsubscribe": true,
+        "birthTopic": "",
+        "birthQos": "0",
+        "birthRetain": "false",
+        "birthPayload": "",
+        "birthMsg": {},
+        "closeTopic": "",
+        "closeQos": "0",
+        "closeRetain": "false",
+        "closePayload": "",
+        "closeMsg": {},
+        "willTopic": "",
+        "willQos": "0",
+        "willRetain": "false",
+        "willPayload": "",
+        "willMsg": {},
+        "userProps": "",
+        "sessionExpiry": ""
+    },
+    {
+        "id": "e4d0f57be5e6ac2d",
+        "type": "ui_tab",
+        "name": "Smart Sentry",
+        "icon": "dashboard",
+        "disabled": false,
+        "hidden": false
+    },
+    {
+        "id": "401c33cadf51821e",
+        "type": "global-config",
+        "env": [],
+        "modules": {
+            "node-red-dashboard": "3.6.6"
+        }
+    }
+]
