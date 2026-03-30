@@ -1,0 +1,356 @@
+# legit code
+import cv2
+import numpy as np
+import time
+import threading
+import os
+from datetime import datetime
+from ultralytics import YOLO
+from gpiozero import MotionSensor
+import paho.mqtt.client as mqtt
+from paho.mqtt.enums import CallbackAPIVersion
+import json
+import base64
+
+# Ensure DISPLAY is set for VNC
+if "DISPLAY" not in os.environ:
+    os.environ["DISPLAY"] = ":0"
+
+# =========================
+# CONFIG (UPDATED FOR MESH)
+# =========================
+CAMERA_TYPE        = "ENTRY"       # CHANGE TO "EXIT" ON YOUR OTHER PI
+BROKER_IP          = "192.168.10.5" # Points to the OCR Pi's Static Mesh IP
+
+PIR_PIN            = 4
+ACTIVE_WINDOW      = 15         
+TRIGGER_COOLDOWN   = 5
+OCR_TOPIC          = "camera/plate/crop"
+STATUS_TOPIC       = "sentry/ocr/status"
+MAX_PLATES_PER_TRIGGER = 2  
+SHOW_GUI = True 
+
+# =========================
+# STATE & LOCKS
+# =========================
+system_state        = "IDLE" 
+camera_active_until = 0
+plates_sent_this_session = 0 
+ocr_is_ready        = True  
+state_lock          = threading.Lock()
+
+def _ts(): return datetime.now().strftime("%H:%M:%S")
+
+def activate_camera():
+    global system_state, camera_active_until, plates_sent_this_session
+    with state_lock:
+        system_state = "ACTIVE"
+        camera_active_until = time.time() + ACTIVE_WINDOW
+        plates_sent_this_session = 0  
+    print(f"[{_ts()}] ⚡ MOTION: Powering ON {CAMERA_TYPE} Camera for {ACTIVE_WINDOW}s")
+
+# =========================
+# MQTT CALLBACKS
+# =========================
+def on_mqtt_message(client, userdata, msg):
+    global ocr_is_ready
+    if msg.topic == STATUS_TOPIC:
+        if msg.payload.decode('utf-8') == "READY":
+            with state_lock:
+                ocr_is_ready = True
+
+# =========================
+# PIR THREAD (UNCHANGED)
+# =========================
+def pir_thread(pir):
+    global system_state
+    print("PIR stabilizing (20s)...")
+    time.sleep(20)
+    print("PIR Ready. System ARMED.")
+    while True:
+        with state_lock: current_state = system_state
+        if current_state == "IDLE":
+            if pir.value == 1:
+                time.sleep(0.5)
+                if pir.value == 1:
+                    print(f"[{_ts()}] 🚶 REAL MOTION DETECTED.")
+                    activate_camera()
+                    time.sleep(ACTIVE_WINDOW)
+                    with state_lock: system_state = "COOLDOWN"
+                    print(f"[{_ts()}] ⏳ Camera OFF. Entering Cooldown ({TRIGGER_COOLDOWN}s)...")
+                    time.sleep(TRIGGER_COOLDOWN)
+                    while pir.value == 1: time.sleep(0.5)
+                    with state_lock: system_state = "IDLE"
+                    print(f"[{_ts()}] 🟢 System ARMED (IDLE).")
+        time.sleep(0.2)
+
+# =========================
+# MAIN CAMERA LOOP
+# =========================
+def main():
+    global plates_sent_this_session, ocr_is_ready, system_state
+    print("Loading YOLO Model...")
+    model = YOLO("/home/glensohpi/sentry_env/license-plate-finetune-v1n.pt")
+    pir = MotionSensor(PIR_PIN)
+    
+    mqtt_client = mqtt.Client(CallbackAPIVersion.VERSION2, f"Sentry_{CAMERA_TYPE}_Pi")
+    mqtt_client.on_message = on_mqtt_message
+    try:
+        mqtt_client.connect(BROKER_IP, 1883)
+        mqtt_client.subscribe(STATUS_TOPIC)
+        mqtt_client.loop_start()
+    except:
+        print("MQTT Broker Offline")
+
+    threading.Thread(target=pir_thread, args=(pir,), daemon=True).start()
+    cap = None
+    last_sent_time = 0
+
+    try:
+        while True:
+            now = time.time()
+            with state_lock:
+                active = (system_state == "ACTIVE") and (now < camera_active_until)
+                current_plates_sent = plates_sent_this_session
+                is_ocr_ready = ocr_is_ready
+
+            if active:
+                if cap is None:
+                    cap = cv2.VideoCapture(0)
+                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+                    time.sleep(1.0) 
+
+                success, frame = cap.read()
+                if success:
+                    results = model(frame, conf=0.5, verbose=False)[0]
+                    if (current_plates_sent < MAX_PLATES_PER_TRIGGER) and (now - last_sent_time >= 2.0) and is_ocr_ready:
+                        for box in results.boxes:
+                            x1, y1, x2, y2 = map(int, box.xyxy[0])
+                            h, w = y2-y1, x2-x1
+                            pad = int(max(h, w) * 0.15)
+                            crop = frame[max(0, y1-pad):y2+pad, max(0, x1-pad):x2+pad]
+                            
+                            if crop.size > 0:
+                                _, buf = cv2.imencode(".jpg", crop)
+                                capture_time = _ts()
+                                img_b64 = base64.b64encode(buf.tobytes()).decode('utf-8')
+                                
+                                # --- THE MAGIC FIX: TAGGING THE PAYLOAD ---
+                                payload = json.dumps({
+                                    "timestamp": capture_time, 
+                                    "image": img_b64,
+                                    "camera_type": CAMERA_TYPE  # Tells OCR Pi who this is
+                                })
+                                
+                                with state_lock:
+                                    ocr_is_ready = False 
+                                    plates_sent_this_session += 1
+                                mqtt_client.publish(OCR_TOPIC, payload)
+                                print(f"[{capture_time}] 📸 Plate Sent as {CAMERA_TYPE}. Waiting for OCR...")
+                                last_sent_time = now
+                                break
+                    if SHOW_GUI:
+                        try: cv2.imshow("Smart Sentry Feed", results.plot())
+                        except: pass
+            else:
+                if cap is not None:
+                    cap.release()
+                    cap = None
+                    if SHOW_GUI:
+                        try: cv2.destroyWindow("Smart Sentry Feed")
+                        except: pass
+                if SHOW_GUI:
+                    try:
+                        idle_img = np.zeros((150, 400, 3), dtype=np.uint8)
+                        with state_lock: current_s = system_state
+                        if current_s == "IDLE": status_text, color = "ARMED (IDLE)", (0, 255, 0)
+                        elif current_s == "COOLDOWN": status_text, color = "COOLDOWN...", (0, 165, 255)
+                        else: status_text, color = "PROCESSING", (0, 0, 255)
+                        cv2.putText(idle_img, status_text, (90, 85), cv2.FONT_HERSHEY_SIMPLEX, 1.2, color, 3)
+                        cv2.imshow(f"{CAMERA_TYPE} Status", idle_img)
+                    except: pass
+            if cv2.waitKey(1) & 0xFF == ord('q'): break
+            time.sleep(0.05)
+    finally:
+        if cap: cap.release()
+        cv2.destroyAllWindows()
+
+if __name__ == "__main__":
+    main()
+
+# for testing 
+# import cv2
+# import time
+# import threading
+# import subprocess
+# import numpy as np
+# import os
+# import re
+# from datetime import datetime
+# from ultralytics import YOLO
+# import paho.mqtt.client as mqtt
+# from paho.mqtt.enums import CallbackAPIVersion
+# import json, base64
+# import psutil
+# import sys
+
+# # --- CONFIG ---
+# BROKER_IP = "192.168.50.2"
+# PHASE_TIME = 600  
+# MODEL_PATH = "/home/glensohpi/sentry_env/license-plate-finetune-v1n.pt"
+
+# stats = {
+#     "Baseline": {"fps": [], "inf_speed": [], "temp": [], "load": [], "mem": [], "ins_sec": [], "ipc": []},
+#     "Stress": {"fps": [], "inf_speed": [], "temp": [], "load": [], "mem": [], "ins_sec": [], "ipc": []}
+# }
+
+# ocr_ready = True
+# last_ocr_time = time.time()
+# state_lock = threading.Lock()
+# test_start = time.time()
+
+# def get_hardware_metrics():
+#     try:
+#         sample_time = 0.5
+#         cmd = f"sudo perf stat -e instructions,cycles -p {os.getpid()} sleep {sample_time} 2>&1"
+#         out = subprocess.check_output(cmd, shell=True).decode()
+#         ins = 0; ipc = 0.0
+#         ins_match = re.search(r'([\d\,\.]+)\s+instructions', out)
+#         ipc_match = re.search(r'([\d\,\.]+)\s+insn per cycle', out)
+#         if ins_match: ins = int(ins_match.group(1).replace(',', '').replace('.', ''))
+#         if ipc_match: ipc = float(ipc_match.group(1).replace(',', '.'))
+#         return ins / sample_time, ipc
+#     except: return 0, 0.0
+
+# def get_system_metrics():
+#     temp = float(subprocess.check_output(['vcgencmd', 'measure_temp']).decode().replace("temp=", "").replace("'C\n", ""))
+#     mem_gib = float(subprocess.check_output(['free', '-m']).decode().splitlines()[1].split()[2]) / 1024.0
+#     load_cpus = psutil.cpu_percent(interval=None) / 100.0
+#     return temp, mem_gib, load_cpus
+
+# def on_message(client, userdata, msg):
+#     global ocr_ready, last_ocr_time
+#     if msg.topic == "sentry/ocr/status" and msg.payload.decode() == "READY":
+#         with state_lock: 
+#             ocr_ready = True
+#             last_ocr_time = time.time()
+
+# client = mqtt.Client(CallbackAPIVersion.VERSION2, "Camera_Pi_Bench")
+# client.on_message = on_message
+# client.connect(BROKER_IP, 1883)
+# client.subscribe("sentry/ocr/status")
+# client.loop_start()
+
+# def generate_report():
+#     print("\n" + "="*55 + "\nCAMERA PI FINAL REPORT\n" + "="*55)
+#     for p in ["Baseline", "Stress"]:
+#         if stats[p]["fps"]:
+#             elapsed = time.time() - test_start
+#             actual_phase_time = min(elapsed, PHASE_TIME) if p == "Baseline" else max(0, elapsed - PHASE_TIME)
+#             total_ins_raw = (np.mean(stats[p]['ins_sec']) * actual_phase_time) if stats[p]['ins_sec'] else 0
+            
+#             if total_ins_raw >= 1e12:
+#                 ins_str = f"{total_ins_raw / 1e12:.2f} Trillion"
+#             else:
+#                 ins_str = f"{total_ins_raw / 1e9:.2f} Billion (Stopped early)"
+
+#             print(f"PHASE: {p}")
+#             print(f"  Throughput (Active FPS): {np.mean(stats[p]['fps']):.1f} FPS")
+#             print(f"  Inference Speed (YOLO):  {np.mean(stats[p]['inf_speed']):.1f} ms")
+#             print(f"  Compute (Instructions):  {ins_str}")
+#             print(f"  Efficiency (IPC):        {np.mean(stats[p]['ipc']) if stats[p]['ipc'] else 0:.2f}")
+#             print(f"  Thermal (Peak Temp):     {np.max(stats[p]['temp']):.1f}°C")
+#             print(f"  Load (Active CPU Util):  {np.mean(stats[p]['load']):.3f} CPUs")
+#             print(f"  Memory (RAM Footprint):  ~{np.mean(stats[p]['mem']):.2f} GiB")
+#             print("-" * 55)
+
+# def main():
+#     global ocr_ready, last_ocr_time, test_start
+#     model = YOLO(MODEL_PATH)
+    
+#     # Initialize Camera (Using index 1 as you set it)
+#     cap = cv2.VideoCapture(0)
+#     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1) 
+    
+#     test_start = time.time()
+#     print(f"[{datetime.now().strftime('%H:%M:%S')}] STARTING DUAL-PHASE CAMERA BENCHMARK")
+
+#     try:
+#         while True:
+#             now = time.time()
+#             elapsed = now - test_start
+#             phase = "Baseline" if elapsed < PHASE_TIME else "Stress"
+#             if elapsed > (PHASE_TIME * 2): break
+
+#             if not ocr_ready and (now - last_ocr_time > 10):
+#                 with state_lock: ocr_ready = True; last_ocr_time = now
+
+#             loop_start = time.perf_counter()
+#             ret, frame = cap.read()
+            
+#             if not ret: 
+#                 continue
+
+#             perf_data = []
+#             perf_thread = None
+#             if int(elapsed) % 10 == 0:
+#                 def cap_perf(): perf_data.append(get_hardware_metrics())
+#                 perf_thread = threading.Thread(target=cap_perf)
+#                 perf_thread.start()
+
+#             inf_start = time.perf_counter()
+#             results = model(frame, verbose=False)[0]
+#             inf_speed = (time.perf_counter() - inf_start) * 1000
+            
+#             if perf_thread:
+#                 perf_thread.join()
+#                 if perf_data and perf_data[0][1] > 0:
+#                     stats[phase]["ins_sec"].append(perf_data[0][0])
+#                     stats[phase]["ipc"].append(perf_data[0][1])
+
+#             # CALCULATE METRICS FIRST
+#             fps = 1.0 / (time.perf_counter() - loop_start)
+#             temp, mem, load = get_system_metrics()
+            
+#             stats[phase]["fps"].append(fps)
+#             stats[phase]["inf_speed"].append(inf_speed)
+#             stats[phase]["temp"].append(temp)
+#             stats[phase]["mem"].append(mem)
+#             stats[phase]["load"].append(load)
+
+#             if int(elapsed) % 15 == 0:
+#                 print(f"Live Stats -> FPS: {fps:.1f} | Temp: {temp}C | Load: {load:.2f} CPUs | IPC: {stats[phase]['ipc'][-1] if stats[phase]['ipc'] else 0.0}")
+
+#             # NOW HANDLE THE NETWORK AND TRUE HARDWARE SLEEP
+#             with state_lock: ready = ocr_ready
+            
+#             if ready and len(results.boxes) > 0:
+#                 _, buf = cv2.imencode(".jpg", frame)
+#                 client.publish("camera/plate/crop", json.dumps({"image": base64.b64encode(buf).decode()}))
+#                 with state_lock: ocr_ready = False
+                
+#                 if phase == "Baseline":
+#                     print(f"[{phase}] Frame sent. Simulating PIR sleep (System halted for 5s)...")
+                    
+#                     # 1. Completely halt the script and model
+#                     time.sleep(5)
+                    
+#                     # 2. Wake up and flush the old frames so YOLO gets a live image next loop
+#                     for _ in range(4): 
+#                         cap.grab()
+                    
+#                     # (NO MORE CV2.VIDEOCAPTURE LINES HERE!)
+
+#     finally:
+#         if cap.isOpened():
+#             cap.release()
+
+# if __name__ == "__main__":
+#     try:
+#         main()
+#         generate_report()
+#     except KeyboardInterrupt:
+#         print("\nTest manually stopped via Ctrl+C. Generating early report...")
+#         generate_report()
+#         sys.exit(0)
