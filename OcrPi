@@ -1,0 +1,296 @@
+import cv2
+import numpy as np
+import easyocr
+import gc
+import paho.mqtt.client as mqtt
+from paho.mqtt.enums import CallbackAPIVersion
+import pandas as pd
+import os
+import json
+import base64
+import time
+
+# --- CONFIGURATION (UPDATED FOR MESH) ---
+CSV_FILE = os.path.expanduser("~/idk - White List.csv")
+
+# 0.0.0.0 means "Listen on all interfaces", including the bat0 mesh IP (192.168.10.5)
+MQTT_LOCAL_BROKER = "0.0.0.0"    
+# Points to Marcloh's static Mesh IP to send alerts to the Node-RED Dashboard
+MQTT_CLOUD_BROKER = "192.168.10.1"  
+
+TOPIC_NOTIFY = "sentry/cloud/alerts"
+TOPIC_STATUS = "sentry/ocr/status"
+TOPIC_CROP = "camera/plate/crop"
+TOPIC_REGISTER = "sentry/register"
+TOPIC_WHITELIST_SYNC = "sentry/whitelist"
+
+print("Loading EasyOCR Model into RAM...")
+reader = easyocr.Reader(['en'], gpu=False)
+is_busy = False
+
+cloud_client = mqtt.Client(CallbackAPIVersion.VERSION1, "OCR_Cloud_Bridge")
+
+def sync_whitelist(client):
+    try:
+        if not os.path.exists(CSV_FILE):
+            pd.DataFrame(columns=['Car Plate', 'Entry Frequency']).to_csv(CSV_FILE, index=False)
+        df = pd.read_csv(CSV_FILE)
+        whitelist_data = df.to_dict(orient="records")
+        payload = json.dumps(whitelist_data)
+        client.publish(TOPIC_WHITELIST_SYNC, payload, retain=True)
+        print(f"🔄 SYNCED: Sent {len(whitelist_data)} records to Cloud")
+    except Exception as e:
+        print(f"Sync Error: {e}")
+
+def handle_registration(payload, client):
+    try:
+        action = payload.get("action")
+        car_plate = payload.get("carplate", "").strip().upper().replace(" ", "")
+        if not car_plate: return
+        df = pd.read_csv(CSV_FILE)
+        df['Car Plate'] = df['Car Plate'].astype(str).str.upper().str.strip()
+        changed = False
+        
+        if action == "add":
+            if car_plate not in df['Car Plate'].values:
+                new_row = pd.DataFrame({'Car Plate': [car_plate], 'Entry Frequency': [0]})
+                df = pd.concat([df, new_row], ignore_index=True)
+                changed = True
+                print(f"➕ REGISTERED: {car_plate}")
+        elif action == "remove":
+            if car_plate in df['Car Plate'].values:
+                df = df[df['Car Plate'] != car_plate]
+                changed = True
+                print(f"➖ REMOVED: {car_plate}")
+                
+        if changed:
+            df.to_csv(CSV_FILE, index=False)
+            sync_whitelist(client)
+    except Exception as e:
+        print(f"Registration Error: {e}")
+
+# --- UPDATED: Now accepts camera_type dynamically ---
+def process_plate_logic(plate_text, client, timestamp, camera_type):
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            df = pd.read_csv(CSV_FILE)
+            df['Car Plate'] = df['Car Plate'].astype(str).str.upper().str.strip()
+
+            if plate_text in df['Car Plate'].values:
+                idx = df.index[df['Car Plate'] == plate_text][0]
+                current_freq = int(df.at[idx, 'Entry Frequency'])
+                
+                # --- NEW DYNAMIC EXIT / ENTRY LOGIC ---
+                if camera_type == "EXIT":
+                    new_freq = max(0, current_freq - 1) 
+                    df.at[idx, 'Entry Frequency'] = new_freq
+                    msg = f"[{timestamp}] 🚗 DEPARTED: {plate_text} (Remaining inside: {new_freq})"
+                else:
+                    new_freq = current_freq + 1
+                    df.at[idx, 'Entry Frequency'] = new_freq
+                    if current_freq > 0:
+                        msg = f"[{timestamp}] ⚠️ WARNING: Duplicate Entry for {plate_text} (Total inside: {new_freq})"
+                    else:
+                        msg = f"[{timestamp}] ✅ AUTHORIZED: {plate_text} entering."
+                
+                df.to_csv(CSV_FILE, index=False)
+                sync_whitelist(client) 
+            else:
+                if camera_type == "EXIT":
+                    msg = f"[{timestamp}] 🚨 ALERT: Unauthorized/Unknown Car Exiting: {plate_text}"
+                else:
+                    msg = f"[{timestamp}] 🚨 ALERT: Unauthorized/Unknown Car Found Entering: {plate_text}"
+
+            print(msg)
+            client.publish(TOPIC_NOTIFY, msg) 
+            break 
+        except PermissionError:
+            print(f"[{timestamp}] CSV Locked. Retrying ({attempt+1}/{max_retries})...")
+            time.sleep(0.5)
+        except Exception as e:
+            print(f"[{timestamp}] Data Processing Error: {e}")
+            break
+
+# --- CALLBACKS ---
+def on_cloud_message(client, userdata, msg):
+    try:
+        if msg.topic == TOPIC_REGISTER:
+            payload = json.loads(msg.payload.decode('utf-8'))
+            if payload.get("action") == "sync":
+                sync_whitelist(client)
+            else:
+                handle_registration(payload, client)
+    except Exception as e:
+        print(f"Cloud Message Error: {e}")
+
+def on_local_message(client, userdata, msg):
+    global is_busy
+    if is_busy: return
+    
+    if msg.topic == TOPIC_CROP:
+        try:
+            is_busy = True
+            payload = json.loads(msg.payload.decode('utf-8'))
+            capture_time = payload.get("timestamp", "UNKNOWN")
+            camera_type = payload.get("camera_type", "ENTRY") # Reads the tag from the payload!
+            
+            img_bytes = base64.b64decode(payload["image"])
+            nparr = np.frombuffer(img_bytes, np.uint8)
+            plate_img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+            if plate_img is not None:
+                results = reader.readtext(plate_img)
+                if results:
+                    for (bbox, text, conf) in results:
+                        if conf > 0.45:
+                            clean_text = "".join(e for e in text if e.isalnum()).upper()
+                            print(f"[{capture_time}] ===> {camera_type} PLATE READ: {clean_text}")
+                            
+                            # Passes the dynamically read camera_type to the logic function
+                            process_plate_logic(clean_text, cloud_client, capture_time, camera_type)
+                else:
+                    print(f"[{capture_time}] ===> No readable text detected from {camera_type}.")
+            del plate_img
+            gc.collect()
+        except Exception as e:
+            print(f"Local Image Error: {e}")
+        finally:
+            is_busy = False
+            client.publish(TOPIC_STATUS, "READY")
+
+local_client = mqtt.Client(CallbackAPIVersion.VERSION1, "OCR_Local_Processor")
+cloud_client.on_message = on_cloud_message
+local_client.on_message = on_local_message
+
+print(f"Connecting to Cloud Broker (Mesh) at {MQTT_CLOUD_BROKER}...")
+cloud_client.connect(MQTT_CLOUD_BROKER, 1883, 60)
+cloud_client.subscribe(TOPIC_REGISTER)
+cloud_client.loop_start() 
+
+print(f"Listening for Camera Pis on {MQTT_LOCAL_BROKER}...")
+local_client.connect(MQTT_LOCAL_BROKER, 1883, 60)
+local_client.subscribe(TOPIC_CROP)
+
+print("✅ OCR Pi Online - Listening for both Entry and Exit Cameras!")
+sync_whitelist(cloud_client) 
+local_client.publish(TOPIC_STATUS, "READY")
+local_client.loop_forever()
+
+# # #testing code for profiling and temp monitoring
+# import time, json, base64, cv2, numpy as np, paho.mqtt.client as mqtt
+# from paho.mqtt.enums import CallbackAPIVersion
+# import easyocr, psutil, subprocess, threading, os, re
+
+# print("Loading OCR Model...")
+# reader = easyocr.Reader(['en'], gpu=False, download_enabled=False)
+# stats = {
+#     "Baseline": {"inf_speed": [], "load": [], "temp": [], "mem": [], "ins_sec": [], "ipc": []},
+#     "Stress": {"inf_speed": [], "load": [], "temp": [], "mem": [], "ins_sec": [], "ipc": []}
+# }
+# PHASE_TIME = 600
+# test_start = time.time()
+# print("OCR Model Loaded.")
+
+# def get_perf_snapshot():
+#     try:
+#         sample_time = 0.5
+#         cmd = f"sudo perf stat -e instructions,cycles -p {os.getpid()} sleep {sample_time} 2>&1"
+#         out = subprocess.check_output(cmd, shell=True).decode()
+#         ins = 0; ipc = 0.0
+        
+#         ins_match = re.search(r'([\d\,]+)\s+instructions', out)
+#         ipc_match = re.search(r'([\d\.]+)\s+insn per cycle', out)
+        
+#         if ins_match: ins = int(ins_match.group(1).replace(',', ''))
+#         if ipc_match: ipc = float(ipc_match.group(1))
+        
+#         ins_per_sec = ins / sample_time
+#         return ins_per_sec, ipc
+#     except Exception as e:
+#         return 0, 0.0
+
+# def get_system_metrics():
+#     temp = float(subprocess.check_output(['vcgencmd', 'measure_temp']).decode().replace("temp=", "").replace("'C\n", ""))
+#     mem_mib = psutil.Process(os.getpid()).memory_info().rss / (1024 * 1024)
+#     mem_gib = mem_mib / 1024.0
+#     load_cpus = psutil.cpu_percent(interval=None) / 100.0
+#     return temp, mem_gib, load_cpus
+
+# def on_message(client, userdata, msg):
+#     elapsed = time.time() - test_start
+#     phase = "Baseline" if elapsed < PHASE_TIME else "Stress"
+    
+#     t_start = time.perf_counter()
+    
+#     try:
+#         data = json.loads(msg.payload.decode())
+#         nparr = np.frombuffer(base64.b64decode(data['image']), np.uint8)
+#         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+#         if img is not None:
+#             perf_data = []
+#             def capture(): perf_data.append(get_perf_snapshot())
+#             t = threading.Thread(target=capture)
+#             t.start()
+            
+#             reader.readtext(img) 
+            
+#             t.join()
+#             if perf_data and perf_data[0][1] > 0: 
+#                 stats[phase]["ins_sec"].append(perf_data[0][0])
+#                 stats[phase]["ipc"].append(perf_data[0][1])
+
+#         inf_speed = (time.perf_counter() - t_start) * 1000
+#         temp, mem, load = get_system_metrics()
+
+#         stats[phase]["inf_speed"].append(inf_speed)
+#         stats[phase]["load"].append(load)
+#         stats[phase]["temp"].append(temp)
+#         stats[phase]["mem"].append(mem)
+        
+#         current_ipc = stats[phase]['ipc'][-1] if stats[phase]['ipc'] else 0.0
+#         print(f"[{phase}] Inf: {inf_speed:.0f}ms | Load: {load:.2f} CPUs | Temp: {temp}C | IPC: {current_ipc}")
+#     except Exception as e:
+#         print(f"Error: {e}")
+#     finally:
+#         client.publish("sentry/ocr/status", "READY")
+
+# def generate_report():
+#     print("\n" + "="*55 + "\nOCR PI FINAL PERFORMANCE REPORT\n" + "="*55)
+#     for p in ["Baseline", "Stress"]:
+#         if stats[p]["inf_speed"]:
+#             # If stopped early, calculate based on actual elapsed time for that phase
+#             elapsed = time.time() - test_start
+#             actual_phase_time = min(elapsed, PHASE_TIME) if p == "Baseline" else max(0, elapsed - PHASE_TIME)
+            
+#             total_ins_trillions = (np.mean(stats[p]['ins_sec']) * actual_phase_time) / 1e12 if stats[p]['ins_sec'] else 0
+#             print(f"PHASE: {p}")
+#             print(f"  Inference Speed (OCR):   {np.mean(stats[p]['inf_speed']):.1f} ms")
+#             print(f"  Compute (Instructions):  {total_ins_trillions:.2f} Trillion")
+#             print(f"  Efficiency (IPC):        {np.mean(stats[p]['ipc']) if stats[p]['ipc'] else 0:.2f}")
+#             print(f"  Thermal (Peak Temp):     {np.max(stats[p]['temp']):.1f}°C")
+#             print(f"  Load (CPU Util):         {np.mean(stats[p]['load']):.3f} CPUs")
+#             print(f"  Memory (RAM Footprint):  ~{np.mean(stats[p]['mem']):.2f} GiB")
+#             print("-" * 55)
+
+# def auto_report():
+#     time.sleep(1220)
+#     generate_report()
+#     os._exit(0)
+
+# client = mqtt.Client(CallbackAPIVersion.VERSION2, "OCR_Processor_Bench")
+# client.on_message = on_message
+# client.connect("127.0.0.1", 1883)
+# client.subscribe("camera/plate/crop")
+# threading.Thread(target=auto_report, daemon=True).start()
+
+# print("✅ OCR BENCHMARK READY. Waiting for images...")
+# client.publish("sentry/ocr/status", "READY")
+
+# try:
+#     client.loop_forever()
+# except KeyboardInterrupt:
+#     client.disconnect()
+#     generate_report()
+#     print("Test manually stopped.")
