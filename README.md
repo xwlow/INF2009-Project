@@ -1,4 +1,3 @@
-### INF2009-Project
 ### INF2009-Project: Core Security Features & Threat Detection
 
 The Smart Sentry system operates as a fully integrated edge-AI surveillance network. It combines hardware sensors, machine learning, and networking to provide real-time threat analysis and access control.
