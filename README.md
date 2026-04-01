@@ -1,6 +1,6 @@
 # INF2009-Project: Core Security Features & Threat Detection
 
-##The Smart Sentry system operates as a fully integrated edge-AI surveillance network. It combines hardware sensors, machine learning, and networking to provide real-time threat analysis and access control.
+#### The Smart Sentry system operates as a fully integrated edge-AI surveillance network. It combines hardware sensors, machine learning, and networking to provide real-time threat analysis and access control.
 
 #### 1. Active Loitering Detection (Humans & Vehicles)
 The system actively monitors the duration that specific objects remain within the camera's field of view. 
