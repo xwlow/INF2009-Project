@@ -364,11 +364,9 @@ ip addr show bat0
 From Node 1, verify you can reach the OCR database over the mesh:
 ```bash
 ping -c 4 192.168.10.5
-
+ping -c 4 192.168.10.1
 ```
-```
 
-```markdown
 ### Phase 6: Machine Learning Failover and Resource Management
 
 To ensure continuous surveillance, the system implements a Heartbeat-driven failover between the Primary Node (Node 1) and the Backup Node (Node 6). This mechanism minimizes the Recovery Time Objective (RTO) by keeping the detection engine in a "Warm" state.
@@ -445,4 +443,3 @@ The complexity is handled entirely by the "Listener" logic on the Backup Pi:
 
 #### 5. Hardware Efficiency and Thermal Control
 By using a `time.sleep(0.5)` gate while in Standby, the Backup Pi 5 maintains a low thermal profile. Even though the Machine Learning models are stored in RAM, the CPU does not perform any matrix multiplications until the failover is triggered, effectively preserving the lifespan of the hardware and reducing power consumption in the lab environment.
-```
