@@ -367,3 +367,82 @@ ping -c 4 192.168.10.5
 
 ```
 ```
+
+```markdown
+### Phase 6: Machine Learning Failover and Resource Management
+
+To ensure continuous surveillance, the system implements a Heartbeat-driven failover between the Primary Node (Node 1) and the Backup Node (Node 6). This mechanism minimizes the Recovery Time Objective (RTO) by keeping the detection engine in a "Warm" state.
+
+#### 1. Hot Standby and Model Persistence
+Unlike traditional failover systems that launch scripts only after a crash is detected, the Backup Pi initializes the YOLOv11 and Brand Classifier models immediately upon boot. 
+
+* **Memory Allocation:** The OpenVINO models are loaded into the Raspberry Pi 5 RAM during the script initialization phase. 
+* **Latency Mitigation:** Because the model weights are already in memory, the transition from Standby to Active mode does not require a disk-read or model-loading cycle (which typically takes 8-10 seconds on a Pi 5). 
+* **Seamless Takeover:** The only delay during a failover is the network latency and the 60-second watchdog timeout. Once the timeout is reached, inference begins instantly on the next available camera frame.
+
+```python
+# INITIALIZATION: Executed once on boot
+# The models are held in memory even while the Pi is in Standby mode.
+print("Initializing YOLO & Escalated Brand Classifier...")
+detector = YOLO('yolo26n_openvino_model/', task="detect") 
+classifier = YOLO('runs/classify/train4/weights/best_openvino_model/', task="classify")
+
+# The camera thread also starts immediately to keep the frame buffer fresh.
+vs = VideoStream(0).start()
+```
+
+#### 2. The Resource Gatekeeper (CPU Control)
+This is the logic gate that prevents the Backup Pi from overheating or wasting CPU cycles while the Main Pi is healthy. By using `time.sleep(0.5)`, the CPU usage remains near 0% for machine learning tasks until needed.
+
+```python
+# MAIN LOOP: Resource Gating
+while True:
+    # FAILOVER GATEKEEPER
+    if not failover_active:
+        # The CPU stops here and waits. 
+        # No YOLO inference or matrix multiplication occurs in Standby.
+        time.sleep(0.5) 
+        continue
+    
+    # Takeover occurs only when failover_active is True
+    frame = vs.read()
+    results = detector.track(frame, imgsz=320, persist=True)
+```
+
+#### 3. Self-Aware Watchdog (Loopback Prevention)
+The watchdog is designed to be "Self-Aware" to prevent a loopback condition. Since all nodes publish to the same `sentry/alerts` MQTT topic, a standard watchdog would hear its own messages and mistake them for the Main Pi.
+
+The logic implements a source-validation check:
+* **Identification:** Every MQTT payload includes an `origin_ip` field.
+* **Filtering:** The Backup Pi specifically listens for the Main Pi's static IP (`192.168.10.1`). 
+* **Conflict Avoidance:** If the Backup Pi receives a message from its own IP, the watchdog ignores it. This prevents the Backup Pi from accidentally "locking itself out" or shutting down its own detection loop while the Main Pi is offline.
+
+```python
+def on_heartbeat(client, userdata, msg):
+    global last_heartbeat, failover_active
+    
+    # Parse the incoming message from the B.A.T.M.A.N. mesh
+    data = json.loads(msg.payload.decode())
+    origin_ip = data.get("origin_ip")
+    
+    # VALIDATION: Only reset the timer if the message is from the Main Pi (.1)
+    if origin_ip == "192.168.10.1":
+        last_heartbeat = time.time()
+        
+        # If the Main Pi returns, the Backup Pi automatically steps down
+        if failover_active:
+            print("Main Pi detected! Returning to Standby...")
+            failover_active = False
+```
+
+#### 4. Zero-Configuration for Primary Node
+A significant advantage of this architecture is that the Primary Node (Main Camera) requires no special failover code. It simply publishes its telemetry normally. 
+
+The complexity is handled entirely by the "Listener" logic on the Backup Pi:
+* **Passive Monitoring:** The Backup Pi stays in a low-power state by gating the CPU-heavy `detector.track()` function behind a `failover_active` flag.
+* **Heartbeat Tracking:** As long as messages from `192.168.10.1` arrive, the `last_heartbeat` timer resets.
+* **Autonomous Takeover:** The moment the Main Pi stops sending data (due to power failure, OS crash, or network pull), the Backup Pi autonomously assumes the role of the primary detector without requiring any signal or "last words" from the failing node.
+
+#### 5. Hardware Efficiency and Thermal Control
+By using a `time.sleep(0.5)` gate while in Standby, the Backup Pi 5 maintains a low thermal profile. Even though the Machine Learning models are stored in RAM, the CPU does not perform any matrix multiplications until the failover is triggered, effectively preserving the lifespan of the hardware and reducing power consumption in the lab environment.
+```
