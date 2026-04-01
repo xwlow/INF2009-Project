@@ -29,126 +29,6 @@ The networking being a mesh on its own prevents a single point of failure
 * **Inference Speed:** Inference timings across all devices where applicable even when load tested were well below 3-400ms with the OCR and Plate recognition taking 300ms or under even during stress/load testing where thermal averages hiked by around 10 degrees or so.
 
 * 
-
-
-
-\## General Notes
-
-Smart Sentry is a multi-Raspberry Pi monitoring system that uses MQTT and Node-RED for live dashboard monitoring, whitelist registration, OCR-based car plate checking, and cloud(uses an edge device, the RPI5 to mimic one) alert logging.
-
-
-
-\## Components
-
-\- \*\*Broker / Dashboard Pi\*\*
-
-&#x20; - Runs MQTT broker
-
-&#x20; - Runs Node-RED dashboard
-
-&#x20; - Displays live feed, risk score, whitelist, and cloud alerts
-
-\- \*\*OCR Pi\*\*
-
-&#x20; - Receives plate crop images
-
-&#x20; - Uses EasyOCR to read car plates
-
-&#x20; - Checks whitelist CSV
-
-&#x20; - Publishes alerts and whitelist updates
-
-\- \*\*Camera / Sensor Pis\*\*
-
-&#x20; - Publish livefeed, cropped plate images, and sensor readings
-
-
-
-\## Main Files
-
-\- `flows.json` - exported Node-RED flow
-
-\- `ocr\_pi.py` - OCR and whitelist processing script
-
-\- other Python scripts for camera/sensor publishing
-
-
-
-\## MQTT Topics
-
-\- `sentry/alerts` - live feed alerts and scene risk data
-
-\- `sentry/register` - add/remove/sync whitelist commands
-
-\- `sentry/whitelist` - current whitelist data
-
-\- `sentry/cloud/alerts` - cloud alert log messages
-
-\- `sentry/light` - BH1750 light sensor readings
-
-\- `camera/plate/crop` - plate crop images for OCR
-
-\- `sentry/ocr/status` - OCR ready status
-
-
-
-\## CSV Format
-
-Whitelist CSV format:
-
-\- `Car Plate`
-
-\- `Entry Frequency`
-
-
-
-\## Requirements
-
-Python libraries used:
-
-\- paho-mqtt
-
-\- pandas
-
-\- numpy
-
-\- opencv-python
-
-\- easyocr
-
-\- smbus2
-
-\- RPi.GPIO
-
-
-
-Node-RED packages used:
-
-\- Node-RED Dashboard
-
-\- MQTT nodes
-
-\- Template, function, gauge, notification, debug nodes
-
-
-
-\## How to Run
-
-1\. Start MQTT broker on the broker Pi
-
-2\. Start Node-RED dashboard
-
-3\. Import `flows.json` into Node-RED
-
-4\. Run the OCR and sensor scripts on the respective Pis
-
-5\. Ensure all Pis use the correct broker IP and MQTT topics
-
-
-
-
-
-
 # 6-Node B.A.T.M.A.N. Mesh Architecture
 ## Base Guide & General Documentation
 
@@ -488,3 +368,123 @@ While Tailscale is highly effective for mobile presentations and rapid lab proto
 
 #### 4. Additional Pointers/Caveats
 Being a project in its early phase/prototyping period. The above mentioned system was done with the thought of it being a proof of concept and as such not all the nodes had redundancies added for them. However should the project go further and need arises the redundancy code can be easily modified and packaged to any sensor back up node if required. For critical or complete physical failure the RPI5 is easily flashed within 15 minutes with its previous configuration via and IMG file. Allowing nodes with backed up IMG files to be replaced via plug and play. Redundancy acts as the first layer of defence when a system is down.
+
+
+
+\## General Notes
+
+Smart Sentry is a multi-Raspberry Pi monitoring system that uses MQTT and Node-RED for live dashboard monitoring, whitelist registration, OCR-based car plate checking, and cloud(uses an edge device, the RPI5 to mimic one) alert logging.
+
+
+
+\## Components
+
+\- \*\*Broker / Dashboard Pi\*\*
+
+&#x20; - Runs MQTT broker
+
+&#x20; - Runs Node-RED dashboard
+
+&#x20; - Displays live feed, risk score, whitelist, and cloud alerts
+
+\- \*\*OCR Pi\*\*
+
+&#x20; - Receives plate crop images
+
+&#x20; - Uses EasyOCR to read car plates
+
+&#x20; - Checks whitelist CSV
+
+&#x20; - Publishes alerts and whitelist updates
+
+\- \*\*Camera / Sensor Pis\*\*
+
+&#x20; - Publish livefeed, cropped plate images, and sensor readings
+
+
+
+\## Main Files
+
+\- `flows.json` - exported Node-RED flow
+
+\- `ocr\_pi.py` - OCR and whitelist processing script
+
+\- other Python scripts for camera/sensor publishing
+
+
+
+\## MQTT Topics
+
+\- `sentry/alerts` - live feed alerts and scene risk data
+
+\- `sentry/register` - add/remove/sync whitelist commands
+
+\- `sentry/whitelist` - current whitelist data
+
+\- `sentry/cloud/alerts` - cloud alert log messages
+
+\- `sentry/light` - BH1750 light sensor readings
+
+\- `camera/plate/crop` - plate crop images for OCR
+
+\- `sentry/ocr/status` - OCR ready status
+
+
+
+\## CSV Format
+
+Whitelist CSV format:
+
+\- `Car Plate`
+
+\- `Entry Frequency`
+
+
+
+\## Requirements
+
+Python libraries used:
+
+\- paho-mqtt
+
+\- pandas
+
+\- numpy
+
+\- opencv-python
+
+\- easyocr
+
+\- smbus2
+
+\- RPi.GPIO
+
+
+
+Node-RED packages used:
+
+\- Node-RED Dashboard
+
+\- MQTT nodes
+
+\- Template, function, gauge, notification, debug nodes
+
+
+
+\## How to Run
+
+1\. Start MQTT broker on the broker Pi
+
+2\. Start Node-RED dashboard
+
+3\. Import `flows.json` into Node-RED
+
+4\. Run the OCR and sensor scripts on the respective Pis
+
+5\. Ensure all Pis use the correct broker IP and MQTT topics
+
+
+
+
+
+
