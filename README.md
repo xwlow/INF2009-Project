@@ -485,3 +485,6 @@ By installing Tailscale on Node 1 and enabling Subnet Routing, the node acts as 
 
 #### 3. Production Deployment Alternative
 While Tailscale is highly effective for mobile presentations and rapid lab prototyping, a permanent or enterprise deployment would typically replace this software-defined overlay. Given a dedicated local network infrastructure, standard physical port forwarding via a commercial router or enterprise server would be utilized to expose the dashboard securely. Actual Cloud configurations could also be applied in the future.
+
+#### 4. Additional Pointers/Caveats
+Being a project in its early phase/prototyping period. The above mentioned system was done with the thought of it being a proof of concept and as such not all the nodes had redundancies added for them. However should the project go further and need arises the redundancy code can be easily modified and packaged to any sensor back up node if required. For critical or complete physical failure the RPI5 is easily flashed within 15 minutes with its previous configuration via and IMG file. Allowing nodes with backed up IMG files to be replaced via plug and play. Redundancy acts as the first layer of defence when a system is down.
