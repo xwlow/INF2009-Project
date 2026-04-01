@@ -120,11 +120,15 @@ Node-RED packages used:
 
 
 
-6-node B.A.T.M.A.N. mesh architecture. Base guide + general documentation.
+
+
+
+# 6-Node B.A.T.M.A.N. Mesh Architecture
+## Base Guide & General Documentation
 
 Done on Raspberry Pi 5 hardware running Debian Trixie. It contains almost all scripts done generically for the nodes used in the projects mesh system, warnings, and testing commands (including the breakdown of the different `batctl` commands) in a single, top-to-bottom flow.
 
-This architecture, its redundancy and scalability was assisted by the use of B.A.T.M.A.N Advanced (Layer 2 mesh routing) on Raspberry Pi 5 hardware running Debian Trixie. Allowing for the setup to scale across larger distances with self healing/recovery whenever a node is down. The purpose of a scalable mesh architecture was to enhance scability and deployability. Should any nodes fail, communication carries on where any paths exist. The use of DHCP leasing dyanmic IP addresses applied to nodes(RPI5s) that mainly held sensors and in the future intermidairy RPI5 Pis that could help extand the range and robustness of the project while also preventing single point of failures unlike in a traditional wifi or hotspot system. STATIC IPs are given only to important nodes where data must be aggregated at or points of reference between the system, for exampke database nodes or dashboard/data aggregation nodes.
+This architecture, its redundancy and scalability was assisted by the use of B.A.T.M.A.N Advanced (Layer 2 mesh routing) on Raspberry Pi 5 hardware running Debian Trixie. Allowing for the setup to scale across larger distances with self healing/recovery whenever a node is down. The purpose of a scalable mesh architecture was to enhance scability and deployability. Should any nodes fail, communication carries on where any paths exist. The use of DHCP leasing of dyanmic IP addresses applied to nodes(RPI5s) that mainly held sensors and in the future intermidairy RPI5 Pis that could help extand the range and robustness of the project while also preventing single point of failures unlike in a traditional wifi or hotspot system. STATIC IPs are given only to important nodes where data must be aggregated at or points of reference between the system, for exampke database nodes or dashboard/data aggregation nodes as the nodes/sensor nodes/devices will need to point to wards these special nodes reliably.
 
 ***
 
