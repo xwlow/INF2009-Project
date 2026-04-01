@@ -1,14 +1,41 @@
-# INF2009-Project
+### INF2009-Project
+### INF2009-Project: Core Security Features & Threat Detection
+
+The Smart Sentry system operates as a fully integrated edge-AI surveillance network. It combines hardware sensors, machine learning, and networking to provide real-time threat analysis and access control.
+
+#### 1. Active Loitering Detection (Humans & Vehicles)
+The system actively monitors the duration that specific objects remain within the camera's field of view. 
+* **Behavioral Analysis:** Using the OpenVINO-optimized YOLO models, the edge nodes track individual humans and vehicles across frames. 
+* **Time-Based Alerts:** If an entity remains in the designated zone beyond the predefined safe threshold, the system flags the object's behavioral risk with labels like "HIGH RISK" and immediately publishes an escalated alert to the dashboard.
+
+#### 2. Automated License Plate Recognition (ALPR) & Whitelisting
+The network acts as an automated gatekeeper for vehicle access, cross-referencing incoming vehicles against a dynamic database, in our prototype utilising a CSV and later possibly using SQL in the future.
+* **Real-Time Crosscheck:** Car plates are actively scanned and checked against an approved whitelist.
+* **Interactive GUI Management:** The central dashboard (hosted via Node-RED on the Gateway Node) provides a user-friendly interface for security personnel to manually add, edit, or remove license plates from the whitelist on the fly.
+* **Unauthorized Access Alerts:** Vehicles that trigger due to a non whitelisted plate or duplicate plate in the case of someone trying to spoof their way in will generate immediate security notifications after processing in the OCR PI, typically taking 20ms for packets across nodes and 300ms or under for inference.
+
+#### 3. Hardware Synergy: PIR Sensor & Camera Verification
+To eliminate false positives and ensure accurate event logging, the system utilizes physical hardware validation.
+* **Duplicate Entry Prevention:** A standard optical camera can sometimes double-count a slow-moving or temporarily obscured vehicle. By integrating a Passive Infrared (PIR) sensor at the physical entry choke-point, the system correlates the digital bounding box with a physical thermal trigger. 
+* **State Confirmation:** A vehicle is only logged as a confirmed entry when both the camera tracking ID and the PIR sensor state align, preventing duplicate alerts for the same car. 
+
+#### 4. Dynamic Edge Resolution
+Because the network is designed to be highly modular and self-healing, it does not rely on static IP addresses for the sensor nodes.
+* **DHCP Integration:** The cameras and PIR sensors are attached to Generic Edge Nodes (Nodes 3-6) which receive dynamically assigned IP addresses from the Gateway. 
+* **Agnostic Alerting:** When a node detects a threat, it publishes the alert payload to the shared MQTT topic (`sentry/alerts`). The central dashboard and the failover backup process these alerts based on the payload content (timestamp, object ID, risk score) rather than relying on hardcoded IP tracking, ensuring the security feed remains uninterrupted even if a node reboots and receives a new IP address.
+
+#### 4. Low Latency, Reliable connectivity and Inference Speed
+The networking being a mesh on its own prevents a single point of failure
+* **Latency Between Nodes:** Tests using packets found that the latency between nodes within the size of a room, e.g one node outside the SIT embedded lab and another node inside the far corner of the lab to be on average anywhere from 20 to 30ms
+* **Inference Speed:** Inference timings across all devices where applicable even when load tested were well below 3-400ms with the OCR and Plate recognition taking 300ms or under even during stress/load testing where thermal averages hiked by around 10 degrees or so.
+
+* 
 
 
 
-\# Smart Sentry
+\## General Notes
 
-
-
-\## Overview
-
-Smart Sentry is a multi-Raspberry Pi monitoring system that uses MQTT and Node-RED for live dashboard monitoring, whitelist registration, OCR-based car plate checking, and cloud alert logging.
+Smart Sentry is a multi-Raspberry Pi monitoring system that uses MQTT and Node-RED for live dashboard monitoring, whitelist registration, OCR-based car plate checking, and cloud(uses an edge device, the RPI5 to mimic one) alert logging.
 
 
 
