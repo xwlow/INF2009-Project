@@ -6,26 +6,30 @@ import numpy as np
 import base64
 import json
 import threading
+import csv
 from ultralytics import YOLO
 import paho.mqtt.client as mqtt
 
 # --- 1. CONFIGURATION ---
 HUMAN_MODEL = 'human_risk_model.joblib'
 VEHICLE_MODEL = 'vehicle_risk_model.joblib'
-TARGET_CLASSES = [0, 2, 7] 
-LAPTOP_IP = "172.20.10.3"   
-SEND_INTERVAL = 10.0        
-FORGET_THRESHOLD = 60.0     
-SUSPICIOUS_THRESHOLD = 5.0  # ⏱️ Wait 5s before running Brand Classifier
+TARGET_CLASSES = [0, 2, 7]  # Person, Car, Truck
+LAPTOP_IP = "172.20.10.3"   # Update this to your current laptop IP
+SEND_INTERVAL = 0.30        # MQTT throttle
+FORGET_THRESHOLD = 60.0     # Clear ID after 60s of absence
+SUSPICIOUS_THRESHOLD = 5.0  # Seconds before triggering brand classifier
+CSV_FILE = 'sentry_behavior_database.csv'
 
-# --- 2. THREADED CAMERA ---
+# --- 2. ROBUST THREADED CAMERA WITH FALLBACK ---
 class VideoStream:
     def __init__(self, src=0):
-        self.cap = cv2.VideoCapture(src)
+        self.src = src
+        self.cap = cv2.VideoCapture(self.src)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
-        self.ret, self.frame = self.cap.read()
+        self.ret, self.frame = False, None
         self.stopped = False
+        self.is_connected = False
 
     def start(self):
         threading.Thread(target=self.update, args=(), daemon=True).start()
@@ -33,65 +37,98 @@ class VideoStream:
 
     def update(self):
         while not self.stopped:
-            self.ret, self.frame = self.cap.read()
+            if not self.cap.isOpened():
+                self.is_connected = False
+                time.sleep(2) # Wait before retry
+                self.cap = cv2.VideoCapture(self.src)
+                self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
+                self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
+                continue
+
+            self.ret, frame = self.cap.read()
+            if not self.ret:
+                self.is_connected = False
+                self.cap.release()
+                continue
+            
+            self.is_connected = True
+            self.frame = frame
 
     def read(self):
-        return self.frame
+        return self.frame if self.is_connected else None
 
     def stop(self):
         self.stopped = True
-        self.cap.release()
+        if self.cap: self.cap.release()
 
 # --- 3. INITIALIZATION ---
-print("⚙️ Initializing YOLO & Escalated Brand Classifier...")
-# detector = YOLO('yolo26n_openvino_model1/') #yolo26n_int8_openvino_model/ --> Using 320 for resolution, current one using 640
-detector = YOLO('yolo26n_openvino_model/')
-# detector = YOLO('yolo26n_int8_openvino_model/')
-# classifier = YOLO('runs/classify/train3/weights/best_int8_openvino_model/') 
-classifier = YOLO('runs/classify/train3/weights/best_openvino_model/')
-vs = VideoStream(0).start()
+print("⚙️ Initializing Sentry Systems...")
 
-cv2.namedWindow("Pi Sentry", cv2.WINDOW_NORMAL)
-cv2.resizeWindow("Pi Sentry", 640, 480)
+# CSV Header Setup
+if not os.path.exists(CSV_FILE):
+    with open(CSV_FILE, mode='w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(['duration', 'cx', 'cy', 'area', 'class_id', 'timestamp'])
 
-mqtt_client = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2)
-try:
-    mqtt_client.connect(LAPTOP_IP, 1883, 60)
-    mqtt_client.loop_start() 
-    print(f"📡 MQTT Connected to {LAPTOP_IP}")
-except Exception as e:
-    print(f"⚠️ MQTT Offline: {e}")
+# Load AI Models (OpenVINO Optimized)
+detector = YOLO('yolo26n_openvino_model/', task="detect")
+classifier = YOLO('runs/classify/train4/weights/best_openvino_model/', task="classify")
 
+# Load Behavioral Risk Models
 models = {}
 if os.path.exists(HUMAN_MODEL): models[0] = joblib.load(HUMAN_MODEL)
 if os.path.exists(VEHICLE_MODEL):
     v_model = joblib.load(VEHICLE_MODEL)
     models[2], models[7] = v_model, v_model
 
+# Start Stream
+vs = VideoStream(0).start()
+
+# MQTT Setup
+mqtt_client = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2)
+try:
+    mqtt_client.connect(LAPTOP_IP, 1883, 60)
+    mqtt_client.loop_start() 
+    print(f"📡 MQTT Online: {LAPTOP_IP}")
+except Exception as e:
+    print(f"⚠️ MQTT Offline: {e}")
+
 # State Management
 loitering_times = {}
 last_seen_times = {}
-track_brands = {} # 🧠 Cache for memoization
+track_brands = {} 
 notified_ids = set()
 last_send_time = 0
 prev_frame_time = 0
 actual_scene_risk = 0.0
+frame_count = 0 
 
-print(f"🛡️ SENTRY ACTIVE | Suspicious Threshold: {SUSPICIOUS_THRESHOLD}s")
+cv2.namedWindow("Pi Sentry", cv2.WINDOW_NORMAL)
+cv2.resizeWindow("Pi Sentry", 640, 480)
+
+print(f"🛡️ SENTRY ACTIVE | 27 FPS Target | Zero-Crash Fallback Enabled")
 
 # --- 4. MAIN LOOP ---
 try:
     while True:
         frame = vs.read()
-        if frame is None: continue
         
+        # Handle Camera Disconnection
+        if frame is None:
+            black_frame = np.zeros((240, 320, 3), dtype=np.uint8)
+            cv2.putText(black_frame, "SEARCHING FOR CAMERA...", (40, 120), 1, 0.8, (0, 0, 255), 1)
+            cv2.imshow('Pi Sentry', black_frame)
+            if cv2.waitKey(1) & 0xFF == ord('q'): break
+            continue
+
         current_time = time.time()
         delta_time = current_time - prev_frame_time if prev_frame_time > 0 else 0.0
         fps = 1.0 / delta_time if delta_time > 0 else 0.0
         prev_frame_time = current_time
         h, w, _ = frame.shape
         
-        results = detector.track(frame, imgsz=320, persist=True, tracker="bytetrack.yaml", verbose=False) #Tested with 320
+        # 1. TRACKING
+        results = detector.track(frame, imgsz=320, persist=True, tracker="bytetrack.yaml", verbose=False)
         active_ids, active_objects_data = [], []
         high_risk_count, target_risk = 0, 0.0
 
@@ -112,48 +149,48 @@ try:
                     cx, cy = (x1 + x2) / 2 / w, (y1 + y2) / 2 / h
                     area = ((x2 - x1) * (y2 - y1)) / (h * w)
 
-                    # 1. BEHAVIORAL RISK
+                    # 2. BEHAVIORAL RISK (Isolation Forest)
                     risk_level, color = "NORMAL", (0, 255, 0)
                     if cls_idx in models:
+                        # Predict based on stay_duration, position, and size
                         if models[cls_idx].predict([[stay_duration, cx, cy, area]])[0] == -1:
                             risk_level, color = "HIGH RISK", (0, 0, 255)
 
-                    # 2. ESCALATED & CACHED BRAND CLASSIFICATION
+                    # 3. ESCALATED BRAND CLASSIFICATION
                     current_brand = "Human" if cls_idx == 0 else "Vehicle"
-                    
-                    if cls_idx in [2, 7]: # Car/Truck
-                        # Trigger only if suspicious OR already cached
+                    if cls_idx in [2, 7]:
                         if stay_duration > SUSPICIOUS_THRESHOLD or track_id in track_brands:
                             if track_id not in track_brands:
-                                # Run classification ONCE
                                 car_crop = frame[max(0,y1):min(h,y2), max(0,x1):min(w,x2)]
                                 if car_crop.size > 0:
                                     cls_res = classifier(car_crop, verbose=False)
                                     track_brands[track_id] = cls_res[0].names[cls_res[0].probs.top1]
                             
-                            # Retrieve from cache
                             current_brand = track_brands.get(track_id, "Vehicle")
-                            
-                            # Handle Whitelisting
                             if current_brand == "police_car":
                                 risk_level, color = "WHITELISTED", (255, 191, 0)
 
                     if risk_level == "HIGH RISK": high_risk_count += 1
 
-                    # 3. PAYLOAD PREP
+                    # 4. SAMPLED CSV LOGGING (Every 5 Frames)
+                    if frame_count % 5 == 0:
+                        with open(CSV_FILE, mode='a', newline='') as f:
+                            csv.writer(f).writerow([
+                                round(stay_duration, 4), round(cx, 4), round(cy, 4), 
+                                round(area, 4), cls_idx, time.strftime("%Y-%m-%d %H:%M:%S")
+                            ])
+
+                    # 5. DATA PREP
                     active_objects_data.append({
-                        "track_id": track_id,
-                        "type": "HUMAN" if cls_idx == 0 else "VEHICLE",
-                        "brand": current_brand, 
-                        "individual_risk": risk_level,
-                        "duration": round(stay_duration, 1)
+                        "track_id": track_id, "type": "HUMAN" if cls_idx == 0 else "VEHICLE",
+                        "brand": current_brand, "individual_risk": risk_level, "duration": round(stay_duration, 1)
                     })
                     cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
                     cv2.putText(frame, f"ID:{track_id} {current_brand}", (x1, y1 - 5), 1, 0.7, color, 1)
 
             target_risk = min(100.0, (high_risk_count * 35.0) + (len(active_ids) * 5.0))
 
-        # Risk Smoothing
+        # Scene Risk Smoothing
         if target_risk > actual_scene_risk: actual_scene_risk = target_risk
         else: actual_scene_risk = max(target_risk, actual_scene_risk - (10.0 * delta_time))
 
@@ -164,7 +201,7 @@ try:
                     del loitering_times[tid]
                     if tid in last_seen_times: del last_seen_times[tid]
                     if tid in notified_ids: notified_ids.remove(tid)
-                    if tid in track_brands: del track_brands[tid] # Clear cache
+                    if tid in track_brands: del track_brands[tid]
 
         # --- 6. HUD ---
         if actual_scene_risk >= 80 or high_risk_count >= 3:
@@ -197,7 +234,12 @@ try:
             last_send_time = current_time
 
         cv2.imshow('Pi Sentry', frame)
+        frame_count += 1
         if cv2.waitKey(1) & 0xFF == ord('q'): break
+
 finally:
+    print("🧹 Cleaning up...")
     vs.stop()
     cv2.destroyAllWindows()
+    mqtt_client.loop_stop()
+    print("Sentry Deactivated.")
