@@ -443,3 +443,19 @@ The complexity is handled entirely by the "Listener" logic on the Backup Pi:
 
 #### 5. Hardware Efficiency and Thermal Control
 By using a `time.sleep(0.5)` gate while in Standby, the Backup Pi 5 maintains a low thermal profile. Even though the Machine Learning models are stored in RAM, the CPU does not perform any matrix multiplications until the failover is triggered, effectively preserving the lifespan of the hardware and reducing power consumption in the lab environment.
+
+
+### Final Notes/Possible Expandsions: Remote Access & Presentation Setup (Tailscale)
+
+In the absence of a physical monitor during lab presentations, the network leverages Tailscale to provide secure, remote access to the dashboard from any authorized device.
+
+#### 1. Dual-Network Interface Strategy
+To ensure maximum stability for the mesh network, B.A.T.M.A.N. operates exclusively on the Raspberry Pi's onboard Wi-Fi chip (`wlan0`). The native Pi hardware is significantly more robust for this application, as many aftermarket USB Wi-Fi adapters struggle to reliably support the required Ad-Hoc modes and routing protocols. To maintain external internet access without interrupting the internal edge mesh, a separate USB Wi-Fi adapter (`wlan1`) is utilized on the Gateway Node (Node 1) to connect to standard school or home networks.
+
+#### 2. Tailscale and Subnet Routing
+By installing Tailscale on Node 1 and enabling Subnet Routing, the node acts as a secure tunnel into the `192.168.10.x` mesh network. 
+* **Port Forwarding:** Node-RED (Port 1880) and other web services are forwarded through the Tailnet. 
+* **Global Access:** This setup allows presenters or authorized users to view the live surveillance dashboard and edge analytics from anywhere in the world, completely bypassing restrictive institutional firewalls.
+
+#### 3. Production Deployment Alternative
+While Tailscale is highly effective for mobile presentations and rapid lab prototyping, a permanent or enterprise deployment would typically replace this software-defined overlay. Given a dedicated local network infrastructure, standard physical port forwarding via a commercial router or enterprise server would be utilized to expose the dashboard securely. Actual Cloud configurations could also be applied in the future.
